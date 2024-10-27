@@ -22,7 +22,7 @@ export default {
           success: "#37d399",
           error: "#f77272",
         },
-      },
+      }, 'dark'
     ],
   },
 }
