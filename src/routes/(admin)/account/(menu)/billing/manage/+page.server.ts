@@ -1,25 +1,26 @@
-import { redirect, error } from "@sveltejs/kit"
+import { PRIVATE_STRIPE_API_KEY } from "$env/static/private"
+import { error, redirect } from "@sveltejs/kit"
+import Stripe from "stripe"
 import { getOrCreateCustomerId } from "../../../subscription_helpers.server"
 import type { PageServerLoad } from "./$types"
-import { PRIVATE_STRIPE_API_KEY } from "$env/static/private"
-import Stripe from "stripe"
 const stripe = new Stripe(PRIVATE_STRIPE_API_KEY, { apiVersion: "2023-08-16" })
 
 export const load: PageServerLoad = async ({
   url,
-  locals: { getSession, supabaseServiceRole },
+  locals: { safeGetSession, supabaseServiceRole },
 }) => {
-  const session = await getSession()
+  const { session, user } = await safeGetSession()
   if (!session) {
-    throw redirect(303, "/login")
+    redirect(303, "/login")
   }
 
   const { error: idError, customerId } = await getOrCreateCustomerId({
     supabaseServiceRole,
-    session,
+    user,
   })
   if (idError || !customerId) {
-    throw error(500, {
+    console.error("Error creating customer id", idError)
+    error(500, {
       message: "Unknown error (PCID). If issue persists, please contact us.",
     })
   }
@@ -32,11 +33,9 @@ export const load: PageServerLoad = async ({
     })
     portalLink = portalSession?.url
   } catch (e) {
-    throw error(
-      500,
-      "Unknown error (PSE). If issue persists, please contact us.",
-    )
+    console.error("Error creating billing portal session", e)
+    error(500, "Unknown error (PSE). If issue persists, please contact us.")
   }
 
-  throw redirect(303, portalLink ?? "/account/billing")
+  redirect(303, portalLink ?? "/account/billing")
 }

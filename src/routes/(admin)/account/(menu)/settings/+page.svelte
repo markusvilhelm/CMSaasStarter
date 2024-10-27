@@ -7,7 +7,7 @@
   adminSection.set("settings")
 
   export let data
-  let { session, profile } = data
+  let { profile, user } = data
 </script>
 
 <svelte:head>
@@ -39,7 +39,7 @@
 <SettingsModule
   title="Email"
   editable={false}
-  fields={[{ id: "email", initialValue: session?.user?.email || "" }]}
+  fields={[{ id: "email", initialValue: user?.email || "" }]}
   editButtonTitle="Change Email"
   editLink="/account/settings/change_email"
 />
@@ -50,6 +50,19 @@
   fields={[{ id: "password", initialValue: "••••••••••••••••" }]}
   editButtonTitle="Change Password"
   editLink="/account/settings/change_password"
+/>
+
+<SettingsModule
+  title="Email Subscription"
+  editable={false}
+  fields={[
+    {
+      id: "subscriptionStatus",
+      initialValue: profile?.unsubscribed ? "Unsubscribed" : "Subscribed",
+    },
+  ]}
+  editButtonTitle="Change Subscription"
+  editLink="/account/settings/change_email_subscription"
 />
 
 <SettingsModule

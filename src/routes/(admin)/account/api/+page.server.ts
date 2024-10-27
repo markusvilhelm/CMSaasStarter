@@ -1,10 +1,40 @@
 import { fail, redirect } from "@sveltejs/kit"
+import { sendAdminEmail, sendUserEmail } from "$lib/mailer"
 
 export const actions = {
-  updateEmail: async ({ request, locals: { supabase, getSession } }) => {
-    const session = await getSession()
+  toggleEmailSubscription: async ({ locals: { supabase, safeGetSession } }) => {
+    const { session } = await safeGetSession()
+
     if (!session) {
-      throw redirect(303, "/login")
+      redirect(303, "/login")
+    }
+
+    const { data: currentProfile } = await supabase
+      .from("profiles")
+      .select("unsubscribed")
+      .eq("id", session.user.id)
+      .single()
+
+    const newUnsubscribedStatus = !currentProfile?.unsubscribed
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ unsubscribed: newUnsubscribedStatus })
+      .eq("id", session.user.id)
+
+    if (error) {
+      console.error("Error updating subscription status", error)
+      return fail(500, { message: "Failed to update subscription status" })
+    }
+
+    return {
+      unsubscribed: newUnsubscribedStatus,
+    }
+  },
+  updateEmail: async ({ request, locals: { supabase, safeGetSession } }) => {
+    const { session } = await safeGetSession()
+    if (!session) {
+      redirect(303, "/login")
     }
 
     const formData = await request.formData()
@@ -33,6 +63,7 @@ export const actions = {
     const { error } = await supabase.auth.updateUser({ email: email })
 
     if (error) {
+      console.error("Error updating email", error)
       return fail(500, {
         errorMessage: "Unknown error. If this persists please contact us.",
         email,
@@ -43,10 +74,10 @@ export const actions = {
       email,
     }
   },
-  updatePassword: async ({ request, locals: { supabase, getSession } }) => {
-    const session = await getSession()
+  updatePassword: async ({ request, locals: { supabase, safeGetSession } }) => {
+    const { session, user, amr } = await safeGetSession()
     if (!session) {
-      throw redirect(303, "/login")
+      redirect(303, "/login")
     }
 
     const formData = await request.formData()
@@ -56,8 +87,7 @@ export const actions = {
 
     // Can check if we're a "password recovery" session by checking session amr
     // let currentPassword take priority if provided (user can use either form)
-    // @ts-expect-error: we ignore because Supabase does not maintain an AMR typedef
-    const recoveryAmr = session.user?.amr?.find((x) => x.method === "recovery")
+    const recoveryAmr = amr?.find((x) => x.method === "recovery")
     const isRecoverySession = recoveryAmr && !currentPassword
 
     // if this is password recovery session, check timestamp of recovery session
@@ -115,16 +145,16 @@ export const actions = {
     }
 
     // Check current password is correct before updating, but only if they didn't log in with "recover" link
-    // Note: to make this truely enforced you need to contact supabase. See: https://www.reddit.com/r/Supabase/comments/12iw7o1/updating_password_in_supabase_seems_insecure/
+    // Note: to make this truly enforced you need to contact supabase. See: https://www.reddit.com/r/Supabase/comments/12iw7o1/updating_password_in_supabase_seems_insecure/
     // However, having the UI accessible route still verify password is still helpful, and needed once you get the setting above enabled
     if (!isRecoverySession) {
       const { error } = await supabase.auth.signInWithPassword({
-        email: session?.user.email || "",
+        email: user?.email || "",
         password: currentPassword,
       })
       if (error) {
         // The user was logged out because of bad password. Redirect to error page explaining.
-        throw redirect(303, "/login/current_password_error")
+        redirect(303, "/login/current_password_error")
       }
     }
 
@@ -132,6 +162,7 @@ export const actions = {
       password: newPassword1,
     })
     if (error) {
+      console.error("Error updating password", error)
       return fail(500, {
         errorMessage: "Unknown error. If this persists please contact us.",
         newPassword1,
@@ -148,11 +179,11 @@ export const actions = {
   },
   deleteAccount: async ({
     request,
-    locals: { supabase, supabaseServiceRole, getSession },
+    locals: { supabase, supabaseServiceRole, safeGetSession },
   }) => {
-    const session = await getSession()
-    if (!session) {
-      throw redirect(303, "/login")
+    const { session, user } = await safeGetSession()
+    if (!session || !user?.id) {
+      redirect(303, "/login")
     }
 
     const formData = await request.formData()
@@ -169,19 +200,20 @@ export const actions = {
 
     // Check current password is correct before deleting account
     const { error: pwError } = await supabase.auth.signInWithPassword({
-      email: session?.user.email || "",
+      email: user?.email || "",
       password: currentPassword,
     })
     if (pwError) {
       // The user was logged out because of bad password. Redirect to error page explaining.
-      throw redirect(303, "/login/current_password_error")
+      redirect(303, "/login/current_password_error")
     }
 
     const { error } = await supabaseServiceRole.auth.admin.deleteUser(
-      session.user.id,
+      user.id,
       true,
     )
     if (error) {
+      console.error("Error deleting user", error)
       return fail(500, {
         errorMessage: "Unknown error. If this persists please contact us.",
         currentPassword,
@@ -189,12 +221,12 @@ export const actions = {
     }
 
     await supabase.auth.signOut()
-    throw redirect(303, "/")
+    redirect(303, "/")
   },
-  updateProfile: async ({ request, locals: { supabase, getSession } }) => {
-    const session = await getSession()
-    if (!session) {
-      throw redirect(303, "/login")
+  updateProfile: async ({ request, locals: { supabase, safeGetSession } }) => {
+    const { session, user } = await safeGetSession()
+    if (!session || !user?.id) {
+      redirect(303, "/login")
     }
 
     const formData = await request.formData()
@@ -238,20 +270,53 @@ export const actions = {
       })
     }
 
-    const { error } = await supabase.from("profiles").upsert({
-      id: session?.user.id,
-      full_name: fullName,
-      company_name: companyName,
-      website: website,
-      updated_at: new Date(),
-    })
+    // To check if created or updated, check if priorProfile exists
+    const { data: priorProfile, error: priorProfileError } = await supabase
+      .from("profiles")
+      .select(`*`)
+      .eq("id", session?.user.id)
+      .single()
+
+    const { error } = await supabase
+      .from("profiles")
+      .upsert({
+        id: user.id,
+        full_name: fullName,
+        company_name: companyName,
+        website: website,
+        updated_at: new Date(),
+        unsubscribed: priorProfile?.unsubscribed ?? false,
+      })
+      .select()
 
     if (error) {
+      console.error("Error updating profile", error)
       return fail(500, {
         errorMessage: "Unknown error. If this persists please contact us.",
         fullName,
         companyName,
         website,
+      })
+    }
+
+    // If the profile was just created, send an email to the user and admin
+    const newProfile =
+      priorProfile?.updated_at === null && priorProfileError === null
+    if (newProfile) {
+      await sendAdminEmail({
+        subject: "Profile Created",
+        body: `Profile created by ${session.user.email}\nFull name: ${fullName}\nCompany name: ${companyName}\nWebsite: ${website}`,
+      })
+
+      // Send welcome email
+      await sendUserEmail({
+        user: session.user,
+        subject: "Welcome!",
+        from_email: "no-reply@saasstarter.work",
+        template_name: "welcome_email",
+        template_properties: {
+          companyName: "SaaS Starter",
+        },
       })
     }
 
@@ -261,13 +326,13 @@ export const actions = {
       website,
     }
   },
-  signout: async ({ locals: { supabase, getSession } }) => {
-    const session = await getSession()
+  signout: async ({ locals: { supabase, safeGetSession } }) => {
+    const { session } = await safeGetSession()
     if (session) {
       await supabase.auth.signOut()
-      throw redirect(303, "/")
+      redirect(303, "/")
     } else {
-      throw redirect(303, "/")
+      redirect(303, "/")
     }
   },
 }

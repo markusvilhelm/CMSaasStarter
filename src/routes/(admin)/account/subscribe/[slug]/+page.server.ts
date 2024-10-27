@@ -1,34 +1,35 @@
-import { redirect, error } from "@sveltejs/kit"
+import { PRIVATE_STRIPE_API_KEY } from "$env/static/private"
+import { error, redirect } from "@sveltejs/kit"
+import Stripe from "stripe"
 import {
-  getOrCreateCustomerId,
   fetchSubscription,
+  getOrCreateCustomerId,
 } from "../../subscription_helpers.server"
 import type { PageServerLoad } from "./$types"
-import { PRIVATE_STRIPE_API_KEY } from "$env/static/private"
-import Stripe from "stripe"
 const stripe = new Stripe(PRIVATE_STRIPE_API_KEY, { apiVersion: "2023-08-16" })
 
 export const load: PageServerLoad = async ({
   params,
   url,
-  locals: { getSession, supabaseServiceRole },
+  locals: { safeGetSession, supabaseServiceRole },
 }) => {
-  const session = await getSession()
+  const { session, user } = await safeGetSession()
   if (!session) {
-    throw redirect(303, "/login")
+    redirect(303, "/login")
   }
 
   if (params.slug === "free_plan") {
     // plan with no stripe_price_id. Redirect to account home
-    throw redirect(303, "/account")
+    redirect(303, "/account")
   }
 
   const { error: idError, customerId } = await getOrCreateCustomerId({
     supabaseServiceRole,
-    session,
+    user,
   })
   if (idError || !customerId) {
-    throw error(500, {
+    console.error("Error creating customer id", idError)
+    error(500, {
       message: "Unknown error. If issue persists, please contact us.",
     })
   }
@@ -38,7 +39,7 @@ export const load: PageServerLoad = async ({
   })
   if (primarySubscription) {
     // User already has plan, we shouldn't let them buy another
-    throw redirect(303, "/account/billing")
+    redirect(303, "/account/billing")
   }
 
   let checkoutUrl
@@ -57,11 +58,9 @@ export const load: PageServerLoad = async ({
     })
     checkoutUrl = stripeSession.url
   } catch (e) {
-    throw error(
-      500,
-      "Unknown Error (SSE): If issue persists please contact us.",
-    )
+    console.error("Error creating checkout session", e)
+    error(500, "Unknown Error (SSE): If issue persists please contact us.")
   }
 
-  throw redirect(303, checkoutUrl ?? "/pricing")
+  redirect(303, checkoutUrl ?? "/pricing")
 }

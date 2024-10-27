@@ -1,24 +1,25 @@
-import { redirect, error } from "@sveltejs/kit"
+import { error, redirect } from "@sveltejs/kit"
 import {
-  getOrCreateCustomerId,
   fetchSubscription,
+  getOrCreateCustomerId,
 } from "../../subscription_helpers.server"
 import type { PageServerLoad } from "./$types"
 
 export const load: PageServerLoad = async ({
-  locals: { getSession, supabaseServiceRole },
+  locals: { safeGetSession, supabaseServiceRole },
 }) => {
-  const session = await getSession()
-  if (!session) {
-    throw redirect(303, "/login")
+  const { session, user } = await safeGetSession()
+  if (!session || !user?.id) {
+    redirect(303, "/login")
   }
 
   const { error: idError, customerId } = await getOrCreateCustomerId({
     supabaseServiceRole,
-    session,
+    user,
   })
   if (idError || !customerId) {
-    throw error(500, {
+    console.error("Error creating customer id", idError)
+    error(500, {
       message: "Unknown error. If issue persists, please contact us.",
     })
   }
@@ -31,7 +32,8 @@ export const load: PageServerLoad = async ({
     customerId,
   })
   if (fetchErr) {
-    throw error(500, {
+    console.error("Error fetching subscription", fetchErr)
+    error(500, {
       message: "Unknown error. If issue persists, please contact us.",
     })
   }
