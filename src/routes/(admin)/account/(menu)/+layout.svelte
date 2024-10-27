@@ -2,6 +2,7 @@
   import "../../../../app.css"
   import { writable } from "svelte/store"
   import { setContext } from "svelte"
+  import Theme from "./theme.svelte"
   import { WebsiteName } from "../../../../config"
 
   const adminSectionStore = writable("")
@@ -136,7 +137,10 @@
       </li>
 
       <li class="mt-auto">
-        <a href="/account/sign_out" class="mt-auto text-base">Sign Out</a>
+        <Theme />
+      </li>
+      <li>
+        <a href="/account/sign_out" class="text-base">Sign Out</a>
       </li>
     </ul>
   </div>
